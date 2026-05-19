@@ -1,0 +1,9 @@
+venv/
+.env
+__pycache__/
+uploads/
+chunks/
+cache/
+*.pyc
+*_chunks.npy
+*.npy

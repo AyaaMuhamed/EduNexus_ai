@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: edunexus-ai
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: BACKEND_WEBHOOK_URL
+        value: https://edunexus.runasp.net/api/ai/pipeline/results
+      - key: SHARED_SECRET
+        value: your-agreed-secret-here

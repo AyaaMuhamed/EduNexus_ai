@@ -45,7 +45,6 @@ from pdf_loader.loader import load_pdf_text
 from utils.RAG_Matcher import prepare_pdf_embeddings, find_relevant_pdf_chunks
 from utils.embedding_cache import load_or_create_embeddings
 from utils.RAG_Matcher import embed, chunk_pdf
-from recorder import AudioRecorder
 from Buffering import TranscriptionBuffer
 from MCQQuiz.generator import generate_mcq
 from MCQQuiz.evaluator import evaluate_answer
@@ -57,7 +56,7 @@ from utils import logger
 class LectureSession:
     """Manages one full lecture session end-to-end."""
 
-    def __init__(self, pdf_path: str):
+    def __init__(self, pdf_path: str, on_mcq_ready=None):
         self.pdf_path         = pdf_path
         self.pdf_chunks:      list[str]   = []
         self.pdf_embeddings:  np.ndarray  = np.array([])
@@ -68,9 +67,14 @@ class LectureSession:
         self.buffer   = TranscriptionBuffer()
         self.memory   = IntelligentMemory()
         self.topics   = TopicTracker()
-        self.recorder = AudioRecorder(on_chunk_ready=self._on_new_chunk)
-
+        if on_mcq_ready is None:
+            # CLI mode only — don't import sounddevice in API mode
+            from recorder import AudioRecorder
+            self.recorder = AudioRecorder(on_chunk_ready=self._on_new_chunk)
+        else:
+            self.recorder = None
         self._lock = threading.Lock()
+        self.on_mcq_ready = on_mcq_ready  # None = CLI mode, callable = API mode
 
     # ── Public ────────────────────────────────────────────────────
 
@@ -94,11 +98,12 @@ class LectureSession:
         )
         logger.success("Session", f"RAG ready — {len(self.pdf_chunks)} chunks.")
 
-        # 3. Start audio recording
-        self.recorder.start()
+        # 3. Start audio recording (CLI only — API mode receives chunks from backend)
+        if not self.on_mcq_ready:
+            self.recorder.start()
         self.is_running = True
-        logger.success("Session", "Lecture is LIVE. Press Ctrl+C to end.\n")
-
+        logger.success("Session", "Lecture is LIVE.\n")
+        
         # 4. MCQ loop on main thread
         try:
             self._mcq_loop()
@@ -115,6 +120,8 @@ class LectureSession:
           transcribe → buffer → memory → topic tracker
         """
         # TranscriptionBuffer handles transcription internally
+        if not self.is_running:
+            return          # session was stopped, discard this chunk
         self.buffer.add_chunk(wav_path)
 
         # Feed latest segment into intelligent memory + topic tracker
@@ -188,13 +195,16 @@ class LectureSession:
             logger.error("Session", "MCQ generation failed — skipping.")
             return
 
-        # ── Present to student ─────────────────────────────────────
-        selected = self._present_question(mcq)
-        result   = evaluate_answer(mcq=mcq, selected_answer=selected)
-
-        self.focus_log.append(result)
-        self._print_running_score()
-
+        # ── Present to student (CLI) or send to backend (API) ──────────────────
+        if self.on_mcq_ready:
+            # API mode: fire MCQ to backend via webhook (defined in api.py)
+            self.on_mcq_ready(mcq, self.focus_log)
+        else:
+            # CLI mode: original terminal interaction (unchanged)
+            selected = self._present_question(mcq)
+            result   = evaluate_answer(mcq=mcq, selected_answer=selected)
+            self.focus_log.append(result)
+            self._print_running_score()
         # ── Log topic timeline ─────────────────────────────────────
         timeline = self.topics.get_timeline_summary()
         if timeline:
@@ -226,8 +236,11 @@ class LectureSession:
     # ── Shutdown ──────────────────────────────────────────────────
 
     def _stop(self) -> None:
+        if not self.is_running:
+            return          # already stopped, don't run twice
         self.is_running = False
-        self.recorder.stop()
+        if self.recorder:
+            self.recorder.stop()
         self._print_final_report()
 
     def _print_final_report(self) -> None:

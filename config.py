@@ -1,7 +1,10 @@
 import os
 from dotenv import load_dotenv
-
 load_dotenv()
+
+BACKEND_WEBHOOK_URL = os.environ.get("BACKEND_WEBHOOK_URL", "http://localhost:5000/api/ai/pipeline/results")
+SHARED_SECRET      = os.environ.get("SHARED_SECRET", "dev-secret")
+
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
